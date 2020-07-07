@@ -9,26 +9,31 @@
 
 struct Camera
 {
-	// origin size
-	cv::Matx33f cvK, cvNewK, cvR = cv::Matx33f::eye();
-	cv::Vec3f cvT = cv::Vec3f(0.f, 0.f, 0.f);
-	cv::Matx<float, 5, 1> cvDistCoeff = cv::Matx<float, 5, 1>::zeros();
-	cv::Size cvImgSize, cvNewImgSize = cv::Size(0, 0);
-	cv::Rect cvValidPixROI = cv::Rect(0, 0, 0, 0);
-	double cvRectifyAlpha = 0;
-	cv::Mat cvRectifyMapX, cvRectifyMapY;
+	cv::Size imgSize;
+	// opencv
+	cv::Matx33f cvK, cvKi, cvR, cvRt, cvRtKi;
+	cv::Vec3f cvT, cvPos;
+	cv::Matx<float, 3, 4> cvProj;
 
-	// normalized
-	Eigen::Matrix3f K, Ki, R, Rt, RtKi;
-	Eigen::Vector3f T, pos;
-	Eigen::Matrix<float, 3, 4> proj;
+	// eigen
+	Eigen::Matrix3f eiK, eiKi, eiR, eiRt, eiRtKi;
+	Eigen::Vector3f eiT, eiPos;
+	Eigen::Matrix<float, 3, 4> eiProj;
+
+	// calibration param
+	cv::Mat_<float> distCoeff = cv::Mat_<float>::zeros(5, 1);
+	double rectifyAlpha = 0;
+	cv::Matx33f originK;
+	cv::Mat rectifyMapX, rectifyMapY;
 
 	Camera() {}
 	Camera(const Json::Value& json) { Parse(json); }
 	void Parse(const Json::Value& json);
 	Json::Value Serialize() const;
 
-	void Update();
+	void CV2Eigen();
+	void Eigen2CV();
+	void Rectify();
 	void LookAt(const Eigen::Vector3f& eye, const Eigen::Vector3f& center, const Eigen::Vector3f& up);
 	Eigen::Matrix3f CalcFundamental(const Camera& camera) const;
 	Eigen::Vector3f CalcRay(const Eigen::Vector2f& uv) const;
@@ -46,5 +51,5 @@ struct Triangulator
 	bool convergent;
 	float loss;
 	Eigen::Vector3f pos;
-	void Solve(const int& maxIterTime = 3, const float& updateTolerance = 1e-3f, const float& regularTerm = 1e-4f);
+	void Solve(const int& maxIterTime = 20, const float& updateTolerance = 1e-4f, const float& regularTerm = 1e-4f);
 };

@@ -8,11 +8,11 @@
 
 bool InternalCalibrator::Push(const cv::Mat& img, const bool& display)
 {
-	if (cam.cvImgSize.empty())
-		cam.cvImgSize = cam.cvNewImgSize = cv::Size(img.cols, img.rows);
+	if (cam.imgSize.empty())
+		cam.imgSize = cv::Size(img.cols, img.rows);
 	
 	std::vector<cv::Point2f> corners;
-	bool patternFound = cv::findChessboardCornersSB(img, patternSize, corners, cv::CALIB_CB_NORMALIZE_IMAGE + cv::CALIB_CB_EXHAUSTIVE);
+	bool patternFound = cv::findChessboardCornersSB(img, patternSize, corners, cv::CALIB_CB_EXHAUSTIVE + cv::CALIB_CB_ACCURACY);
 	if (patternFound) {
 		p2ds.emplace_back(corners);
 		if (display) {
@@ -40,13 +40,14 @@ void InternalCalibrator::Calib()
 	std::vector<cv::Mat> rvecsMat;
 
 	// calibrate
-	calibrateCamera(p3ds, p2ds, cam.cvImgSize, cam.cvK, cam.cvDistCoeff, rvecsMat, tvecsMat);
-	cam.Update();
+	calibrateCamera(p3ds, p2ds, cam.imgSize, cam.originK, cam.distCoeff, rvecsMat, tvecsMat);
+	cam.Rectify();
+	cam.CV2Eigen();
 
 	// evaluate
 	for (int imgIdx = 0; imgIdx < p2ds.size(); imgIdx++) {
 		std::vector<cv::Point2f> _p2ds;
-		cv::projectPoints(p3ds[imgIdx], rvecsMat[imgIdx], tvecsMat[imgIdx], cam.cvK, cam.cvDistCoeff, _p2ds);
+		cv::projectPoints(p3ds[imgIdx], rvecsMat[imgIdx], tvecsMat[imgIdx], cam.originK, cam.distCoeff, _p2ds);
 
 		float err = 0.f;
 		for (int pIdx = 0; pIdx < _p2ds.size(); pIdx++)
@@ -63,18 +64,22 @@ bool ExternalCalibrator::Push(const std::map<std::string, cv::Mat>& imgs, const 
 	for (const auto& iter : imgs) {
 		std::vector<cv::Point2f> corners;
 		const Camera& cam = cams.find(iter.first)->second;
-		cv::Mat temp;
-		cv::remap(iter.second, temp, cam.cvRectifyMapX, cam.cvRectifyMapY, cv::INTER_LINEAR);
-		bool patternFound = cv::findChessboardCornersSB(temp, patternSize, corners, cv::CALIB_CB_NORMALIZE_IMAGE + cv::CALIB_CB_EXHAUSTIVE);
+		bool patternFound = cv::findChessboardCornersSB(iter.second, patternSize, corners,
+			cv::CALIB_CB_EXHAUSTIVE + cv::CALIB_CB_ACCURACY);
+
 		if (patternFound) {
+			cv::undistortPoints(corners, corners, cam.originK, cam.distCoeff, cv::noArray(), cam.cvK);
 			corrs.insert(std::make_pair(iter.first, corners));
-			if (display) {
-				const float rate = 1024.f / float(iter.second.cols);
-				cv::resize(temp, temp, cv::Size(1024, int(std::ceil(float(iter.second.rows) * rate))));
+		}
+		if (display) {
+			const float rate = 1024.f / float(iter.second.cols);
+			cv::Mat temp;
+			cv::remap(iter.second, temp, cam.rectifyMapX, cam.rectifyMapY, cv::INTER_LINEAR);
+			cv::resize(temp, temp, cv::Size(1024, int(std::ceil(float(iter.second.rows) * rate))));
+			if (patternFound)
 				cv::drawChessboardCorners(temp, patternSize, cv::Mat(patternSize.width * patternSize.height, 2, CV_32FC1, &corners.data()->x) * rate, true);
-				cv::imshow("chessboard", temp);
-				cv::waitKey(1);
-			}
+			cv::imshow("chessboard", temp);
+			cv::waitKey(1);
 		}
 	}
 	if (corrs.size() >= 2) {
@@ -129,7 +134,7 @@ void ExternalCalibrator::Init()
 			std::vector<Eigen::Matrix<float, 3, 4>> projs;
 			for (const auto& iter : p2ds[maxIdx])
 				if (std::find(initCams.begin(), initCams.end(), iter.first) != initCams.end())
-					projs.emplace_back(cams.find(iter.first)->second.proj);
+					projs.emplace_back(cams.find(iter.first)->second.eiProj);
 			triangulator.projs = Eigen::Map<Eigen::Matrix3Xf>(projs.data()->data(), 3, 4 * projs.size());
 			for (int i = 0; i < patternSize.height * patternSize.width; i++) {
 				std::vector<Eigen::Vector3f> points;
@@ -147,10 +152,11 @@ void ExternalCalibrator::Init()
 			if (std::find(initCams.begin(), initCams.end(), iter.first) == initCams.end()) {
 				Camera& cam = cams.find(iter.first)->second;
 				cv::Mat rvec, rmat;
-				cv::solvePnP(p3ds, iter.second, cam.cvNewK, cv::Mat(), rvec, cam.cvT);
+				cv::solvePnP(p3ds, iter.second, cam.cvK, cv::Mat(), rvec, cam.cvT);
 				cv::Rodrigues(rvec, rmat);
 				cam.cvR = rmat;
-				cam.Update();
+				cam.Rectify();
+				cam.CV2Eigen();
 				initCams.insert(iter.first);
 			}
 		}
@@ -198,9 +204,9 @@ void ExternalCalibrator::Bundle()
 	std::map<std::string, Eigen::Vector3d> rs;
 	std::map<std::string, Eigen::Vector3d> ts;
 	for (const auto& cam : cams) {
-		Eigen::AngleAxisf angleAxis(cam.second.R);
+		Eigen::AngleAxisf angleAxis(cam.second.eiR);
 		rs.insert(std::make_pair(cam.first, Eigen::Vector3f(angleAxis.axis() * angleAxis.angle()).cast<double>()));
-		ts.insert(std::make_pair(cam.first, cam.second.T.cast<double>()));
+		ts.insert(std::make_pair(cam.first, cam.second.eiT.cast<double>()));
 	}
 
 	std::vector<Eigen::Matrix3Xd> p3ds(p2ds.size(), Eigen::Matrix3Xd(3, patternSize.height * patternSize.width));
@@ -209,7 +215,7 @@ void ExternalCalibrator::Bundle()
 		Triangulator triangulator;
 		std::vector<Eigen::Matrix<float, 3, 4>> projs;
 		for (const auto& iter : p2ds[frameIdx])
-			projs.emplace_back(cams.find(iter.first)->second.proj);
+			projs.emplace_back(cams.find(iter.first)->second.eiProj);
 		triangulator.projs = Eigen::Map<Eigen::Matrix3Xf>(projs.data()->data(), 3, 4 * projs.size());
 
 		for (int i = 0; i < patternSize.height * patternSize.width; i++) {
@@ -227,7 +233,7 @@ void ExternalCalibrator::Bundle()
 			double* _t = ts.find(iter.first)->second.data();
 			for (int pIdx = 0; pIdx < iter.second.size(); pIdx++) {
 				const Eigen::Vector2d p2d(iter.second[pIdx].x, iter.second[pIdx].y);
-				ceres::CostFunction* func = new ceres::AutoDiffCostFunction<ReprojCostFunctor, 1, 3, 3, 3>(new ReprojCostFunctor(cam.K.cast<double>(), p2d));
+				ceres::CostFunction* func = new ceres::AutoDiffCostFunction<ReprojCostFunctor, 1, 3, 3, 3>(new ReprojCostFunctor(cam.eiK.cast<double>(), p2d));
 				problem.AddResidualBlock(func, NULL, _r, _t, p3ds[frameIdx].col(pIdx).data());
 			}
 		}
@@ -245,7 +251,7 @@ void ExternalCalibrator::Bundle()
 	for (auto&& cam : cams) {
 		cv::eigen2cv(MathUtil::Rodrigues(Eigen::Vector3f(rs.find(cam.first)->second.cast<float>())), cam.second.cvR);
 		cv::eigen2cv(Eigen::Vector3f(ts.find(cam.first)->second.cast<float>()), cam.second.cvT);
-		cam.second.Update();
+		cam.second.CV2Eigen();
 	}
 
 	std::cout << summary.BriefReport() << std::endl;
@@ -259,7 +265,7 @@ void ExternalCalibrator::Evaluate()
 		Triangulator triangulator;
 		std::vector<Eigen::Matrix<float, 3, 4>> projs;
 		for (const auto& iter : p2ds[frameIdx])
-			projs.emplace_back(cams.find(iter.first)->second.proj);
+			projs.emplace_back(cams.find(iter.first)->second.eiProj);
 		triangulator.projs = Eigen::Map<Eigen::Matrix3Xf>(projs.data()->data(), 3, 4 * projs.size());
 
 		std::vector<float> error;

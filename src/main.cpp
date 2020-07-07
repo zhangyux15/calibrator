@@ -75,7 +75,9 @@ void CalibExternal(const cv::Size& patternSize, const cv::Size2f& squareSize,
 	//			ifs >> p2ds[j].x >> p2ds[j].y;
 	//		pairs.insert(std::make_pair(camStr, p2ds));
 	//	}
-	//	calibrator.p2ds.emplace_back(pairs);
+
+	//	if (i != 1 && i != 10)
+	//		calibrator.p2ds.emplace_back(pairs);
 	//}
 
 	calibrator.Init();
@@ -90,7 +92,7 @@ int main()
 {
 	const cv::Size imgSize(2048, 2048);
 	const cv::Size patternSize(8, 11);
-	const cv::Size2f squareSize(83.5, 83.5);
+	const cv::Size2f squareSize(0.0835, 0.0835);
 	const std::filesystem::path internalPath("../data/internal");
 	const std::filesystem::path externalPath("../data/external");
 	const std::filesystem::path jsonPath("../data/calibration.json");
