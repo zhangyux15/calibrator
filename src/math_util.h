@@ -4,6 +4,7 @@
 #include <type_traits>
 #include <Eigen/Core>
 #include <opencv2/core.hpp>
+#include <iostream>
 
 
 namespace MathUtil {

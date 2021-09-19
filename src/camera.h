@@ -51,5 +51,5 @@ struct Triangulator
 	bool convergent;
 	float loss;
 	Eigen::Vector3f pos;
-	void Solve(const int& maxIterTime = 20, const float& updateTolerance = 1e-4f, const float& regularTerm = 1e-4f);
+	void Solve();
 };
