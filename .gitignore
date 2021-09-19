@@ -10,4 +10,5 @@
 !*.props
 !*.vcxproj
 !*.vcxproj.user
+!*.md
 
