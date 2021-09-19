@@ -12,7 +12,6 @@
 template<typename T>
 void CalibInternal(T& calibrator, const std::filesystem::path& dataPath, const std::filesystem::path& jsonPath, 
 	const bool& display = false, const cv::Size& tarSize = cv::Size()) {
-
 	// calib internal param
 	std::map<std::string, Camera> cams;
 	for (const auto& folder : std::filesystem::directory_iterator(dataPath)) {
@@ -38,15 +37,14 @@ void CalibInternal(T& calibrator, const std::filesystem::path& dataPath, const s
 template<typename T>
 void CalibExternal(T& calibrator, const std::filesystem::path& dataPath, const std::filesystem::path& jsonPath,
 	const bool& display = false, const cv::Size& tarSize = cv::Size()) {
-
 	calibrator.cams = ParseCameras(jsonPath.string());
-
 	std::filesystem::path markerCache = dataPath / "markerCache.txt";
-
 	if (!std::filesystem::exists(markerCache)) {
 		std::map<int, std::map<std::string, cv::Mat>> imgs_seq;
 		for (const auto& folder : std::filesystem::directory_iterator(dataPath)) {
 			if (folder.is_regular_file()) {
+				//if(folder.path().extension().string() == 'jpeg')
+
 				std::string filePath = folder.path().string();
 				std::istringstream sstream(folder.path().filename().replace_extension().string());
 
@@ -105,10 +103,12 @@ void CalibExternal(T& calibrator, const std::filesystem::path& dataPath, const s
 					ifs >> p2ds[j].x >> p2ds[j].y;
 				pairs.insert(std::make_pair(camStr, p2ds));
 			}
+			calibrator.p2ds.emplace_back(pairs);
 		}
 	}
 
 	calibrator.Init();
+	calibrator.Evaluate();
 	calibrator.Bundle();
 	calibrator.Evaluate();
 	SerializeCameras(calibrator.cams, jsonPath.string());
@@ -126,7 +126,7 @@ int main()
 	//ArucoInternalCalibrator calibrator(cv::Size(9,6), 0.08, 0.062);
 	//CalibInternal(calibrator, internalPath, jsonPath, true);
 
-	ExternalCalibrator calibrator({10, 7}, {0.07, 0.07});
+	ExternalCalibrator calibrator({10, 7}, 0.07);
 	CalibExternal(calibrator, externalPath, jsonPath, true, imgSize/4);
 
 

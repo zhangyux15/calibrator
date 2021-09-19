@@ -195,7 +195,7 @@ struct ReprojCostFunctor
 
 		Eigen::Matrix<T, 3, 1> p = m_K.cast<T>() * (R * p3d + t);
 		Eigen::Matrix<T, 2, 1> uv(p[0] / p[2], p[1] / p[2]);
-		residuals[0] = (uv - m_p2d.cast<T>()).norm();
+		residuals[0] = (uv - m_p2d.cast<T>()).squaredNorm();
 		return true;
 	}
 
@@ -205,42 +205,102 @@ private:
 };
 
 
+struct PlaneReprojCostFunctor
+{
+	PlaneReprojCostFunctor(const Eigen::Matrix3d& _K, const Eigen::Vector2d& _pGT, const Eigen::Vector2d& _pPlane) {
+		m_K = _K;
+		m_pGT = _pGT;
+		m_pPlane = _pPlane;
+	}
+
+
+	template<typename T>
+	Eigen::Matrix<T, 3, 3> Rodrigues(const Eigen::Map<const Eigen::Matrix<T, 3, 1>> r)  const {
+		const T theta = r.norm();
+		Eigen::Matrix<T, 3, 3> R;
+		if (theta < T(1e-5))
+			R = Eigen::Matrix3d::Identity().cast<T>();
+		else
+			R = Eigen::AngleAxis<T>(theta, r / theta).matrix();
+		return R;
+	}
+
+	template<typename T>
+	bool operator()(const T* const _r, const T* const _t, const T* const _rPlane, const T* const _tPlane, T* residuals) const {
+		const Eigen::Map<const Eigen::Matrix<T, 3, 1>> r(_r), rPlane(_rPlane);
+		const Eigen::Map<const Eigen::Matrix<T, 3, 1>> t(_t), tPlane(_tPlane);
+
+		Eigen::Matrix<T, 3, 3> R = Rodrigues(r);
+		Eigen::Matrix<T, 3, 3> RPlane = Rodrigues(rPlane);
+
+		Eigen::Matrix<T, 3, 1> p3d = tPlane + RPlane * (Eigen::Vector3f(m_pPlane.x(), m_pPlane.y(), 0.0).cast<T>());
+
+		Eigen::Matrix<T, 3, 1> p = m_K.cast<T>() * (R * p3d + t);
+		Eigen::Matrix<T, 2, 1> uv(p[0] / p[2], p[1] / p[2]);
+		residuals[0] = (uv - m_pGT.cast<T>()).squaredNorm();
+		return true;
+	}
+
+private:
+	Eigen::Matrix3d m_K;
+	Eigen::Vector2d m_pGT, m_pPlane;
+};
+
+
+
 void ExternalCalibrator::Bundle()
 {
 	std::map<std::string, Eigen::Vector3d> rs;
 	std::map<std::string, Eigen::Vector3d> ts;
+	Eigen::Matrix3Xd rPlanes = Eigen::Matrix3Xd::Zero(3, p2ds.size());
+	Eigen::Matrix3Xd tPlanes = Eigen::Matrix3Xd::Zero(3, p2ds.size());
+
+	for (int idx = 0; idx < p2ds.size(); idx++) {
+		Eigen::Matrix3f tri;
+		Triangulator triangulator;
+		std::vector<Eigen::Matrix<float, 3, 4>> projs;
+		for (const auto& iter : p2ds[idx])
+			projs.emplace_back(cams.find(iter.first)->second.eiProj);
+		triangulator.projs = Eigen::Map<Eigen::Matrix3Xf>(projs.data()->data(), 3, 4 * projs.size());
+
+		for (int triIdx = 0; triIdx < 3; triIdx++) {
+			std::vector<Eigen::Vector3f> points;
+			const int pIdx = triIdx == 0 ? 0 : triIdx == 1 ? patternSize.width : 1;
+			for (const auto& iter : p2ds[idx])
+				points.emplace_back(Eigen::Vector3f(iter.second[pIdx].x, iter.second[pIdx].y, 1.f));
+			triangulator.points = Eigen::Map<Eigen::Matrix3Xf>(points.data()->data(), 3, points.size());
+			triangulator.Solve();
+			tri.col(triIdx) = triangulator.pos;
+		}
+		// set T
+		tPlanes.col(idx) = tri.col(0).cast<double>();
+		// set R
+		Eigen::Matrix3f rot;
+		rot.col(0) = (tri.col(1) - tri.col(0)).normalized();
+		rot.col(1) = (tri.col(2) - tri.col(0)).normalized();
+		rot.col(2) = rot.col(0).cross(rot.col(1));
+		Eigen::AngleAxisf angleAxis(rot);
+		rPlanes.col(idx) = (angleAxis.angle() * angleAxis.axis()).cast<double>();
+	}
+
 	for (const auto& cam : cams) {
 		Eigen::AngleAxisf angleAxis(cam.second.eiR);
 		rs.insert(std::make_pair(cam.first, Eigen::Vector3f(angleAxis.axis() * angleAxis.angle()).cast<double>()));
 		ts.insert(std::make_pair(cam.first, cam.second.eiT.cast<double>()));
 	}
 
-	std::vector<Eigen::Matrix3Xd> p3ds(p2ds.size(), Eigen::Matrix3Xd(3, patternSize.height * patternSize.width));
 	ceres::Problem problem;
-	for (int frameIdx = 0; frameIdx < p2ds.size(); frameIdx++) {
-		Triangulator triangulator;
-		std::vector<Eigen::Matrix<float, 3, 4>> projs;
-		for (const auto& iter : p2ds[frameIdx])
-			projs.emplace_back(cams.find(iter.first)->second.eiProj);
-		triangulator.projs = Eigen::Map<Eigen::Matrix3Xf>(projs.data()->data(), 3, 4 * projs.size());
-
-		for (int i = 0; i < patternSize.height * patternSize.width; i++) {
-			std::vector<Eigen::Vector3f> points;
-			for (const auto& iter : p2ds[frameIdx])
-				points.emplace_back(Eigen::Vector3f(iter.second[i].x, iter.second[i].y, 1.f));
-			triangulator.points = Eigen::Map<Eigen::Matrix3Xf>(points.data()->data(), 3, points.size());
-			triangulator.Solve();
-			p3ds[frameIdx].col(i) = triangulator.pos.cast<double>();
-		}
-
+	for (int frameIdx = 0; frameIdx < p2ds.size(); frameIdx++) {		
 		for (auto&& iter : p2ds[frameIdx]) {
 			const Camera& cam = cams.find(iter.first)->second;
 			double* _r = rs.find(iter.first)->second.data();
 			double* _t = ts.find(iter.first)->second.data();
 			for (int pIdx = 0; pIdx < iter.second.size(); pIdx++) {
 				const Eigen::Vector2d p2d(iter.second[pIdx].x, iter.second[pIdx].y);
-				ceres::CostFunction* func = new ceres::AutoDiffCostFunction<ReprojCostFunctor, 1, 3, 3, 3>(new ReprojCostFunctor(cam.eiK.cast<double>(), p2d));
-				problem.AddResidualBlock(func, NULL, _r, _t, p3ds[frameIdx].col(pIdx).data());
+				const Eigen::Vector2d pPlane(float(pIdx / patternSize.width) * squareLen, float(pIdx % patternSize.width) * squareLen);
+				ceres::CostFunction* func = new ceres::AutoDiffCostFunction<PlaneReprojCostFunctor, 1, 3, 3, 3, 3>(
+					new PlaneReprojCostFunctor(cam.eiK.cast<double>(), p2d, pPlane));
+				problem.AddResidualBlock(func, NULL, _r, _t, rPlanes.col(frameIdx).data(), tPlanes.col(frameIdx).data());
 			}
 		}
 	}
