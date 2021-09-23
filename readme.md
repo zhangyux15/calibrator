@@ -22,8 +22,8 @@ The directory tree should look like this:
     |   |-- frameidx_SN.jpeg
     |   |-- ...
     |-- internal
-    |   |-- SN
-    |       |-- xxx.jpeg
+    |    |-- frameidx_SN.jpeg
+    |    |-- ...
     |-- calibration.json
 |--calibrator.sln
 ```
