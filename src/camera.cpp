@@ -222,7 +222,8 @@ void Triangulator::Solve() {
 	Eigen::MatrixXf jacobi = Eigen::MatrixXf::Zero(2 * points.cols(), 4);
 	for (int view = 0; view < points.cols(); view++) {
 		auto proj = projs.middleCols(4 * view, 4);
-		jacobi.middleRows<2>(2 * view) = points.col(view).head(2) * proj.row(2) - proj.topRows<2>();
+		jacobi.middleRows<2>(2 * view) = (points.col(view).head(2) * proj.row(2) - proj.topRows<2>())*points(2, view);
+		//jacobi.middleRows<2>(2 * view) = points.col(view).head(2) * proj.row(2) - proj.topRows<2>();
 	}
 
 	auto posHomo = jacobi.jacobiSvd(Eigen::ComputeFullV).matrixV().rightCols<1>();

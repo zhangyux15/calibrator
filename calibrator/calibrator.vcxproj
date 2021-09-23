@@ -130,13 +130,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\src\calibrator.cpp" />
-    <ClCompile Include="..\src\calibrator_aruco.cpp" />
     <ClCompile Include="..\src\camera.cpp" />
     <ClCompile Include="..\src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\calibrator.h" />
-    <ClInclude Include="..\src\calibrator_aruco.h" />
     <ClInclude Include="..\src\camera.h" />
     <ClInclude Include="..\src\math_util.h" />
   </ItemGroup>
